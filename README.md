@@ -93,3 +93,7 @@ docker run --rm -v "$PWD/../samples:/src" os-sast scan . --repo samples --build 
 ## Contract
 
 `tests/contract/scan-result.schema.json` is a copy of the schema in `sast-platform/contracts`. `test_contract.py` validates real `scan` output against it, and fails if the copy drifts from `sast-platform` when both repos are checked out side by side.
+
+## License
+
+[Apache-2.0](LICENSE)
