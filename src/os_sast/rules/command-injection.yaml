@@ -1,0 +1,94 @@
+# CWE-78: user input reaches a command line that a shell (or a string tokenizer) splits.
+# Passing an argument list with no shell is the fix, so subprocess.run([...]) / execFile(cmd, [args]) never match.
+rules:
+  - id: python-command-injection
+    languages: [python]
+    severity: ERROR
+    message: User input flows into a shell command. Pass an argument list and drop shell=True.
+    metadata:
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$PART.get(...)
+          - pattern: flask.request.$PART[...]
+          - pattern: flask.request.get_json(...)
+    pattern-sanitizers:
+      - pattern: shlex.quote(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$FN($CMD, ..., shell=True, ...)
+              - pattern: os.system($CMD)
+              - pattern: os.popen($CMD, ...)
+          - focus-metavariable: $CMD
+
+  - id: java-command-injection
+    languages: [java]
+    severity: ERROR
+    message: Request parameter flows into an OS command. Validate it against an allow-list and pass arguments separately.
+    metadata:
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: (HttpServletRequest $REQ).$GET(...)
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(getParameter|getParameterValues|getHeader|getQueryString|getPathInfo)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (Runtime $RT).exec($CMD, ...)
+              - pattern: Runtime.getRuntime().exec($CMD, ...)
+              - pattern: new ProcessBuilder($CMD, ...)
+          - focus-metavariable: $CMD
+
+  - id: php-command-injection
+    languages: [php]
+    severity: ERROR
+    message: Request input flows into a shell command. Use escapeshellarg() or avoid the shell.
+    metadata:
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET
+          - pattern: $_POST
+          - pattern: $_REQUEST
+          - pattern: $_COOKIE
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: escapeshellarg(...)
+          - pattern: escapeshellcmd(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: system($CMD, ...)
+              - pattern: exec($CMD, ...)
+              - pattern: shell_exec($CMD)
+              - pattern: passthru($CMD, ...)
+              - pattern: popen($CMD, ...)
+              - pattern: proc_open($CMD, ...)
+          - focus-metavariable: $CMD
+
+  - id: js-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Request input flows into child_process.exec, which runs a shell. Use execFile with an argument array.
+    metadata:
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec($CMD, ...)
+              - pattern: execSync($CMD, ...)
+              - pattern: $CP.exec($CMD, ...)
+              - pattern: $CP.execSync($CMD, ...)
+          - focus-metavariable: $CMD

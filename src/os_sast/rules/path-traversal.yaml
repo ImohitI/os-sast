@@ -1,0 +1,97 @@
+# CWE-22: user input becomes part of a file path, so "../" can escape the intended directory.
+# basename() strips the directory part and is treated as a sanitizer. The sink is where the path is
+# built or opened, reported once; reads of an already-built Path are not separate sinks.
+rules:
+  - id: python-path-traversal
+    languages: [python]
+    severity: ERROR
+    message: User input flows into a file path. Strip it with os.path.basename and check the resolved path stays inside the base directory.
+    metadata:
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$PART.get(...)
+          - pattern: flask.request.$PART[...]
+    pattern-sanitizers:
+      - pattern: os.path.basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: flask.send_file($PATH, ...)
+              - pattern: open($PATH, ...)
+          - focus-metavariable: $PATH
+
+  - id: java-path-traversal
+    languages: [java]
+    severity: ERROR
+    message: Request parameter flows into a file path. Normalize it and check it stays inside the base directory.
+    metadata:
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: (HttpServletRequest $REQ).$GET(...)
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^(getParameter|getParameterValues|getHeader|getPathInfo)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new java.io.File($PATH)
+              - pattern: new java.io.File($DIR, $PATH)
+              - pattern: new java.io.FileInputStream($PATH)
+              - pattern: new java.io.FileOutputStream($PATH, ...)
+              - pattern: (java.nio.file.Path $BASE).resolve($PATH)
+          - focus-metavariable: $PATH
+      - pattern-either:
+          - pattern: java.nio.file.Paths.get(...)
+          - pattern: java.nio.file.Path.of(...)
+
+  - id: php-path-traversal
+    languages: [php]
+    severity: ERROR
+    message: Request input flows into a file path. Use basename() and a fixed base directory.
+    metadata:
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET
+          - pattern: $_POST
+          - pattern: $_REQUEST
+    pattern-sanitizers:
+      - pattern: basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: file_get_contents($PATH, ...)
+              - pattern: fopen($PATH, ...)
+              - pattern: readfile($PATH, ...)
+              - pattern: include $PATH;
+              - pattern: require $PATH;
+          - focus-metavariable: $PATH
+
+  - id: js-path-traversal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Request input flows into a file path. Use path.basename and the sendFile root option.
+    metadata:
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.sendFile($PATH, ...)
+              - pattern: $RES.download($PATH, ...)
+              - pattern: fs.readFile($PATH, ...)
+              - pattern: fs.readFileSync($PATH, ...)
+              - pattern: fs.createReadStream($PATH, ...)
+          - focus-metavariable: $PATH

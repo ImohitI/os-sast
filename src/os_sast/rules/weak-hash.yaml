@@ -1,0 +1,52 @@
+# CWE-328: MD5 / SHA-1 / MD4 / MD2 are broken for integrity and security. Pattern rules, no taint needed.
+rules:
+  - id: jvm-weak-hash
+    languages: [java, kotlin]
+    severity: WARNING
+    message: Weak hash algorithm. Use SHA-256 or stronger (or HMAC for integrity).
+    metadata:
+      cwe: ["CWE-328: Use of Weak Hash"]
+    patterns:
+      - pattern: MessageDigest.getInstance("$ALG", ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^(MD2|MD4|MD5|SHA-?1|SHA)$
+
+  - id: python-weak-hash
+    languages: [python]
+    severity: WARNING
+    message: Weak hash algorithm. Use hashlib.sha256 or stronger.
+    metadata:
+      cwe: ["CWE-328: Use of Weak Hash"]
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          - patterns:
+              - pattern: hashlib.new("$ALG", ...)
+              - metavariable-regex:
+                  metavariable: $ALG
+                  regex: (?i)^(md4|md5|sha1)$
+      - pattern-not: hashlib.$F(..., usedforsecurity=False, ...)
+
+  - id: js-weak-hash
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Weak hash algorithm. Use sha256 or stronger.
+    metadata:
+      cwe: ["CWE-328: Use of Weak Hash"]
+    patterns:
+      - pattern: crypto.createHash("$ALG")
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^(md4|md5|sha1)$
+
+  - id: php-weak-hash
+    languages: [php]
+    severity: WARNING
+    message: Weak hash algorithm. Use hash('sha256', ...) or password_hash() for passwords.
+    metadata:
+      cwe: ["CWE-328: Use of Weak Hash"]
+    pattern-either:
+      - pattern: md5(...)
+      - pattern: sha1(...)

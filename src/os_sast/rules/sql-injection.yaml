@@ -1,0 +1,97 @@
+# CWE-89: user input reaches a SQL string that is executed as-is.
+# Parameterized queries (a constant SQL string + bind values) are the fix, so they never match.
+rules:
+  - id: python-sqli
+    languages: [python]
+    severity: ERROR
+    message: User input flows into a SQL string passed to execute(). Use a parameterized query.
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$PART.get(...)
+          - pattern: flask.request.$PART[...]
+          - pattern: flask.request.get_json(...)
+          - pattern: django.http.HttpRequest.$PART.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CUR.execute($SQL, ...)
+              - pattern: $CUR.executemany($SQL, ...)
+              - pattern: $CUR.executescript($SQL)
+          - focus-metavariable: $SQL
+
+  # JDBC: Statement.execute*(String) runs the SQL text as given. A PreparedStatement takes its SQL
+  # in prepareStatement(), so any non-constant argument here is string-built SQL.
+  - id: java-sqli-statement
+    languages: [java]
+    severity: ERROR
+    message: Non-constant SQL string passed to java.sql.Statement. Use a PreparedStatement with bind parameters.
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+    patterns:
+      - pattern-either:
+          - pattern: (java.sql.Statement $S).$EXEC($SQL, ...)
+          - pattern: (java.sql.Connection $C).createStatement().$EXEC($SQL, ...)
+      - metavariable-regex:
+          metavariable: $EXEC
+          regex: ^(execute|executeQuery|executeUpdate|executeLargeUpdate|addBatch)$
+      - pattern-not: $X.$EXEC("...", ...)
+
+  - id: kotlin-sqli-statement
+    languages: [kotlin]
+    severity: ERROR
+    message: Non-constant SQL string passed to a JDBC Statement. Use prepareStatement with bind parameters.
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+    patterns:
+      - pattern: $S.$EXEC($SQL)
+      - metavariable-regex:
+          metavariable: $EXEC
+          regex: ^(execute|executeQuery|executeUpdate|executeLargeUpdate|addBatch)$
+      - pattern-not: $S.$EXEC("...")
+
+  - id: php-sqli
+    languages: [php]
+    severity: ERROR
+    message: Request input flows into a SQL string. Use mysqli_prepare / PDO::prepare with bound parameters.
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET
+          - pattern: $_POST
+          - pattern: $_REQUEST
+          - pattern: $_COOKIE
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: intval(...)
+          - pattern: (int) $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: mysqli_query($CONN, $SQL, ...)
+              - pattern: mysqli_multi_query($CONN, $SQL)
+              - pattern: pg_query($CONN, $SQL)
+              - pattern: $DB->query($SQL, ...)
+              - pattern: $DB->exec($SQL)
+          - focus-metavariable: $SQL
+
+  - id: js-sqli
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Request input flows into a SQL string passed to query(). Use placeholders and a values array.
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.query($SQL, ...)
+          - focus-metavariable: $SQL
