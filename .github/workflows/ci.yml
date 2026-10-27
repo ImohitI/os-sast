@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  OPENGREP_VERSION: 1.32.0
+  OPENGREP_SHA256: 7360d60174880bd9214f2dfbe439b7bce82b7a3d44cfe945ba833c85cc8bda75
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Side by side, as in local development: the contract test compares the schema copy with
+      # sast-platform's, and the eval step scans samples.
+      - uses: actions/checkout@v7
+        with:
+          path: os-sast
+      - uses: actions/checkout@v7
+        with:
+          repository: ImohitI/sast-platform
+          path: sast-platform
+      - uses: actions/checkout@v7
+        with:
+          repository: ImohitI/samples
+          path: samples
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install opengrep (pinned, checksum verified)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/opengrep" \
+            "https://github.com/opengrep/opengrep/releases/download/v${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          echo "${OPENGREP_SHA256}  $HOME/.local/bin/opengrep" | sha256sum -c -
+          chmod +x "$HOME/.local/bin/opengrep"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: pip install -e "./os-sast[dev,scanners]"
+
+      - run: pytest
+        working-directory: os-sast
+
+      - name: Scan samples and score against expected.json
+        working-directory: os-sast
+        run: |
+          os-sast scan ../samples --repo samples --build "$GITHUB_RUN_NUMBER" --commit "$GITHUB_SHA" --out result.json
+          os-sast eval result.json ../samples/expected.json | tee eval.txt
+          { echo '### os-sast eval on samples (no AI)'; echo '```'; cat eval.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

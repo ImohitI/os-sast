@@ -2,6 +2,9 @@
 
 An "AI SAST tool" built from open-source parts: it runs [Opengrep](https://github.com/opengrep/opengrep) with its own taint rules and [Bandit](https://github.com/PyCQA/bandit), merges their output into one ScanResult JSON, and can ask a local LLM ([Ollama](https://ollama.com)) to triage each finding.
 
+> Part of a SAST pipeline built from open-source parts: [samples](https://github.com/ImohitI/samples) (vulnerable code + ground truth) → **os-sast** (scanner CLI) → [sast-platform](https://github.com/ImohitI/sast-platform) (ingest API, Kafka, consumer, Jenkins) → [sast-dashboard](https://github.com/ImohitI/sast-dashboard) (dashboard API + UI).  
+> Design decisions: [DESIGN.md](https://github.com/ImohitI/sast-platform/blob/main/docs/DESIGN.md) · one scan followed end to end: [WALKTHROUGH.md](https://github.com/ImohitI/sast-platform/blob/main/docs/WALKTHROUGH.md)
+
 ```
 os-sast scan <path> --repo samples --build 1052 --commit a1b2c3d [--ai-triage] --out result.json
 os-sast eval result.json expected.json
