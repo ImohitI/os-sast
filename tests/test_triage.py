@@ -1,8 +1,21 @@
 import urllib.error
 
-from os_sast import triage as triage_module
+from os_sast.llm import LLMError
 from os_sast.model import Finding
-from os_sast.triage import code_snippet, parse_verdict, triage
+from os_sast.triage import RESPONSE_SCHEMA, code_snippet, parse_verdict, triage
+
+
+class FakeProvider:
+    name, model, sends_code_off_machine = "fake", "m", False
+
+    def __init__(self, answer=None, error=None):
+        self.answer, self.error, self.calls = answer, error, []
+
+    def complete_json(self, prompt, schema):
+        self.calls.append((prompt, schema))
+        if self.error:
+            raise self.error
+        return self.answer
 
 
 def make_finding(line=2):
@@ -27,24 +40,32 @@ def test_snippet_marks_the_flagged_line(tmp_path):
     assert snippet.splitlines() == ["      1 | a = 1", ">>    2 | query = f'{x}'", "      3 | run(query)"]
 
 
-def test_triage_never_removes_findings_even_when_the_model_is_down(tmp_path, monkeypatch):
+def test_triage_never_removes_findings_even_when_the_model_is_down(tmp_path):
     (tmp_path / "app.py").write_text("a\nb\nc\n")
-
-    def unreachable(*args, **kwargs):
-        raise urllib.error.URLError("connection refused")
-
-    monkeypatch.setattr(triage_module, "ask_ollama", unreachable)
     findings = [make_finding(1), make_finding(2)]
-    triage(findings, str(tmp_path), "http://localhost:11434", "m")
+    triage(findings, str(tmp_path), FakeProvider(error=urllib.error.URLError("connection refused")))
     assert len(findings) == 2
     assert all(f.ai is None for f in findings)
 
 
-def test_triage_annotates_likely_fp_but_keeps_it(tmp_path, monkeypatch):
+def test_triage_survives_provider_errors_too(tmp_path):
     (tmp_path / "app.py").write_text("a\nb\nc\n")
-    monkeypatch.setattr(triage_module, "ask_ollama",
-                        lambda *a, **k: '{"verdict": "likely_fp", "confidence": 0.9, "reason": "constant", "suggestedFix": ""}')
     findings = [make_finding()]
-    triage(findings, str(tmp_path), "http://localhost:11434", "m")
+    triage(findings, str(tmp_path), FakeProvider(error=LLMError("refused")))
+    assert len(findings) == 1 and findings[0].ai is None
+
+
+def test_triage_annotates_likely_fp_but_keeps_it(tmp_path):
+    (tmp_path / "app.py").write_text("a\nb\nc\n")
+    provider = FakeProvider('{"verdict": "likely_fp", "confidence": 0.9, "reason": "constant", "suggestedFix": ""}')
+    findings = [make_finding()]
+    triage(findings, str(tmp_path), provider)
     assert len(findings) == 1
     assert findings[0].ai["verdict"] == "likely_fp"
+    prompt, schema = provider.calls[0]
+    assert ">>    2 | b" in prompt and schema is RESPONSE_SCHEMA
+
+
+def test_schema_is_strict_enough_for_openai():
+    assert RESPONSE_SCHEMA["additionalProperties"] is False
+    assert set(RESPONSE_SCHEMA["required"]) == set(RESPONSE_SCHEMA["properties"])

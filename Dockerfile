@@ -17,7 +17,9 @@ RUN set -eu; \
 WORKDIR /opt/os-sast
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[scanners]"
+# docker build --build-arg EXTRAS=scanners,bedrock -t os-sast .   to include boto3 for Bedrock
+ARG EXTRAS=scanners
+RUN pip install --no-cache-dir ".[${EXTRAS}]"
 
 WORKDIR /src
 ENTRYPOINT ["os-sast"]

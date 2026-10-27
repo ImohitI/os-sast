@@ -1,6 +1,6 @@
 # os-sast
 
-An "AI SAST tool" built from open-source parts: it runs [Opengrep](https://github.com/opengrep/opengrep) with its own taint rules and [Bandit](https://github.com/PyCQA/bandit), merges their output into one ScanResult JSON, and can ask a local LLM ([Ollama](https://ollama.com)) to triage each finding.
+An "AI SAST tool" built from open-source parts: it runs [Opengrep](https://github.com/opengrep/opengrep) with its own taint rules and [Bandit](https://github.com/PyCQA/bandit), merges their output into one ScanResult JSON, and can ask an LLM to triage each finding: a local open-weights model through [Ollama](https://ollama.com) by default, or OpenAI (and OpenAI-compatible servers), Anthropic Claude, or AWS Bedrock.
 
 > Part of a SAST pipeline built from open-source parts: [samples](https://github.com/ImohitI/samples) (vulnerable code + ground truth) → **os-sast** (scanner CLI) → [sast-platform](https://github.com/ImohitI/sast-platform) (ingest API, Kafka, consumer, Jenkins) → [sast-dashboard](https://github.com/ImohitI/sast-dashboard) (dashboard API + UI).  
 > Design decisions: [DESIGN.md](https://github.com/ImohitI/sast-platform/blob/main/docs/DESIGN.md) · one scan followed end to end: [WALKTHROUGH.md](https://github.com/ImohitI/sast-platform/blob/main/docs/WALKTHROUGH.md)
@@ -17,10 +17,35 @@ os-sast eval result.json expected.json
 | 1. Run scanners | `scanners.py` | `opengrep scan --config <rules> --json` with the bundled rules, and `bandit -r . -f json` |
 | 2. Normalize | `scanners.py` | One `RawFinding` shape: rule, CWE (`CWE-89`), severity (`ERROR→HIGH`, `WARNING→MEDIUM`, `INFO→LOW`), path relative to the root |
 | 3. De-duplicate | `merge.py` | Same CWE + file + line → one finding; `foundBy` lists every tool; highest severity wins. `fingerprint = sha256(cwe\|file\|line)` |
-| 4. AI triage (optional) | `triage.py` | Rule, message and ±15 lines of code → Ollama `/api/generate` with a JSON schema as `format`. Adds `ai: {verdict, confidence, reason, suggestedFix}` |
+| 4. AI triage (optional) | `triage.py`, `llm.py` | Rule, message and ±15 lines of code → the chosen provider, constrained to a JSON schema. Adds `ai: {verdict, confidence, reason, suggestedFix}` and a `tools` entry `ai-triage` = `provider/model` |
 | 5. Write | `cli.py` | The ScanResult contract from `sast-platform/contracts` |
 
-**The AI only annotates, it never deletes.** A wrong "likely_fp" must not hide a real bug. If Ollama is down or answers nonsense, the finding keeps `ai: null` and the scan still succeeds.
+**The AI only annotates, it never deletes.** A wrong "likely_fp" must not hide a real bug. If the model is down or answers nonsense, the finding keeps `ai: null` and the scan still succeeds.
+
+## AI providers
+
+| `--ai-provider` | Where the model runs | Structured output | Config |
+|---|---|---|---|
+| `ollama` (default) | Your machine. Open-weights models such as `qwen2.5-coder:7b`, `llama3.1:8b` or `gpt-oss:20b` | `format: <schema>` | `--ai-url` / `OLLAMA_URL` (default `http://localhost:11434`) |
+| `openai` | OpenAI, **or any OpenAI-compatible server** (vLLM, llama.cpp `llama-server`, LM Studio, Ollama's `/v1`) | `response_format: json_schema`, `strict: true` | `OPENAI_API_KEY`; `--ai-url` / `OPENAI_BASE_URL` for a compatible server |
+| `anthropic` | Claude via the Anthropic API | forced tool call (`tool_choice`) | `ANTHROPIC_API_KEY` |
+| `bedrock` | AWS Bedrock in your account: Claude, Llama, Mistral, Nova, ... | Converse API forced tool call; falls back to plain JSON for models without `toolChoice` | AWS credential chain; `--aws-region`; needs `pip install ".[bedrock]"` (boto3) |
+
+`--model` is required for every provider except `ollama` (model names change too often to hard-code). `OS_SAST_AI_PROVIDER` and `OS_SAST_AI_MODEL` set defaults, e.g. in Jenkins.
+
+```bash
+os-sast scan ../samples --repo samples --build 1 --ai-triage --out r.json                                  # local Ollama
+os-sast scan ../samples --repo samples --build 1 --ai-triage --ai-provider openai --model <model> --out r.json
+os-sast scan ../samples --repo samples --build 1 --ai-triage --ai-provider openai \
+        --ai-url http://localhost:8000/v1 --model Qwen/Qwen2.5-Coder-7B-Instruct --out r.json              # vLLM (key: any value)
+os-sast scan ../samples --repo samples --build 1 --ai-triage --ai-provider anthropic --model claude-haiku-5-5 --out r.json
+os-sast scan ../samples --repo samples --build 1 --ai-triage --ai-provider bedrock --aws-region us-east-1 \
+        --model <bedrock model or inference-profile id> --out r.json
+```
+
+Missing keys or models fail in seconds, before the scan runs. The scan prints whether code snippets **leave this machine**: only send code to a hosted model when you're allowed to. On Bedrock the request stays in your AWS account and region.
+
+Compare models with `eval`: run the same scan per provider, then `os-sast eval` on each result. The `ai-triage` tool entry records which model produced the verdicts.
 
 ## `eval`
 
@@ -84,7 +109,7 @@ ollama pull qwen2.5-coder:7b
 os-sast scan ../samples --repo samples --build 1 --ai-triage --out result.json
 ```
 
-Scans run offline: the rules are local, opengrep has no metrics option, and os-sast passes `--disable-version-check`. `OLLAMA_URL` and `OLLAMA_MODEL` override the defaults (`http://localhost:11434`, `qwen2.5-coder:7b`).
+Scans run offline: the rules are local, opengrep has no metrics option, and os-sast passes `--disable-version-check`. `OLLAMA_URL` and `OLLAMA_MODEL` still override the Ollama defaults (`http://localhost:11434`, `qwen2.5-coder:7b`); other providers: see [AI providers](#ai-providers). Hosted providers are the one exception to offline scans.
 
 Docker (the image downloads the pinned opengrep binary and checks its SHA-256):
 

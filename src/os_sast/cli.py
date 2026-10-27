@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from . import __version__
 from .evaluate import evaluate
+from .llm import PROVIDERS, LLMError, make_provider
 from .merge import merge
 from .scanners import BUNDLED_RULES, ScannerError, run_bandit, run_opengrep
 from .triage import triage
@@ -27,9 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--rules", default=str(BUNDLED_RULES),
                       help="opengrep rules: a YAML file or a directory (default: the rules bundled with os-sast)")
     scan.add_argument("--no-bandit", action="store_true")
-    scan.add_argument("--ai-triage", action="store_true", help="annotate each finding with a local LLM verdict")
-    scan.add_argument("--ollama-url", default=os.environ.get("OLLAMA_URL", "http://localhost:11434"))
-    scan.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b"))
+    scan.add_argument("--ai-triage", action="store_true", help="annotate each finding with an LLM verdict")
+    scan.add_argument("--ai-provider", choices=list(PROVIDERS),
+                      default=os.environ.get("OS_SAST_AI_PROVIDER", "ollama"),
+                      help="where the model runs (default: ollama, local)")
+    scan.add_argument("--model", default=os.environ.get("OS_SAST_AI_MODEL") or os.environ.get("OLLAMA_MODEL"),
+                      help="model name or Bedrock model id (default for ollama: qwen2.5-coder:7b)")
+    scan.add_argument("--ai-url", "--ollama-url", dest="ai_url", default=None,
+                      help="base URL override, e.g. a remote Ollama or an OpenAI-compatible server")
+    scan.add_argument("--aws-region", default=None, help="Bedrock region (default: the AWS config chain)")
 
     ev = commands.add_parser("eval", help="precision/recall of a result against expected.json")
     ev.add_argument("result")
@@ -41,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
 def scan(args) -> int:
     root = os.path.abspath(args.path)
     raw, tools = [], []
+
+    # Build the provider before scanning, so missing keys or config fail in seconds, not after the scan.
+    provider = make_provider(args.ai_provider, args.model, args.ai_url, args.aws_region) if args.ai_triage else None
 
     print(f"opengrep ({args.rules}) on {root}", file=sys.stderr)
     found, version = run_opengrep(root, args.rules)
@@ -56,9 +66,12 @@ def scan(args) -> int:
     findings = merge(raw)
     print(f"{len(raw)} raw results -> {len(findings)} findings after de-duplication", file=sys.stderr)
 
-    if args.ai_triage:
-        print(f"AI triage with {args.model} at {args.ollama_url}", file=sys.stderr)
-        triage(findings, root, args.ollama_url, args.model)
+    if provider:
+        where = "code snippets leave this machine" if provider.sends_code_off_machine else "local"
+        print(f"AI triage with {provider.name}/{provider.model} ({where})", file=sys.stderr)
+        triage(findings, root, provider)
+        # Record which model produced the verdicts, so evals of different models can be told apart.
+        tools.append({"name": "ai-triage", "version": f"{provider.name}/{provider.model}"})
 
     result = {
         "repoId": args.repo,
@@ -84,7 +97,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return scan(args) if args.command == "scan" else run_eval(args)
-    except ScannerError as error:
+    except (ScannerError, LLMError) as error:
         print(f"os-sast: {error}", file=sys.stderr)
         return 2
 

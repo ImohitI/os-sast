@@ -1,4 +1,4 @@
-"""Ask a local LLM (Ollama) for a verdict on each finding.
+"""Ask an LLM for a verdict on each finding (provider: see llm.py; default a local Ollama model).
 
 The AI only annotates. A finding is never removed here, whatever the verdict: a wrong "likely_fp"
 must not hide a real vulnerability. If the model is unreachable or answers nonsense, the finding
@@ -9,13 +9,14 @@ import json
 import os
 import sys
 import urllib.error
-import urllib.request
 
+from .llm import LLMError
 from .model import Finding
 
 CONTEXT_LINES = 15
 
-# Ollama "structured outputs": the model is constrained to this JSON shape.
+# Structured output: every provider constrains the model to this JSON shape. All properties are
+# required and additionalProperties is false, which OpenAI's strict mode needs.
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -25,6 +26,7 @@ RESPONSE_SCHEMA = {
         "suggestedFix": {"type": "string"},
     },
     "required": ["verdict", "confidence", "reason", "suggestedFix"],
+    "additionalProperties": False,
 }
 
 PROMPT = """You are an application security reviewer triaging static analysis findings.
@@ -78,28 +80,13 @@ def parse_verdict(text: str) -> dict | None:
     }
 
 
-def ask_ollama(prompt: str, url: str, model: str, timeout: float) -> str:
-    body = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "format": RESPONSE_SCHEMA,
-        "options": {"temperature": 0},
-    }).encode()
-    request = urllib.request.Request(
-        f"{url.rstrip('/')}/api/generate", data=body, headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.load(response)["response"]
-
-
-def triage(findings: list[Finding], root: str, url: str, model: str, timeout: float = 120) -> None:
-    """Fill finding.ai in place. Never removes or reorders findings."""
+def triage(findings: list[Finding], root: str, provider) -> None:
+    """Fill finding.ai in place using provider.complete_json. Never removes or reorders findings."""
     for index, finding in enumerate(findings, start=1):
         try:
             prompt = build_prompt(finding, code_snippet(root, finding.file, finding.line))
-            finding.ai = parse_verdict(ask_ollama(prompt, url, model, timeout))
-        except (OSError, urllib.error.URLError, KeyError, ValueError) as error:
+            finding.ai = parse_verdict(provider.complete_json(prompt, RESPONSE_SCHEMA))
+        except (OSError, urllib.error.URLError, KeyError, IndexError, TypeError, ValueError, LLMError) as error:
             finding.ai = None
             print(f"  triage {index}/{len(findings)} failed, keeping finding without ai: {error}", file=sys.stderr)
             continue
